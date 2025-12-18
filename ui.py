@@ -138,6 +138,22 @@ def draw_game_ui(surface, player_obj, game_entities, current_slime_max_hp_val, b
        medium_font is None or not isinstance(medium_font, pygame.font.Font):
         return
 
+
+    # 🚩🚩 닉네임 표시 로직 추가 🚩🚩
+    try:
+        # 닉네임 텍스트 생성
+        name_text = font.render(f"id: {player_obj.name}", True, config.WHITE)
+        
+        # 화면 오른쪽 위 (HP 바와 대칭되는 위치)
+        name_text_x = config.SCREEN_WIDTH - name_text.get_width() - 10 
+        name_text_y = 10 
+        
+        surface.blit(name_text, (name_text_x, name_text_y))
+    except pygame.error as e:
+        print(f"ERROR: 닉네임 텍스트 렌더링 실패: {e}.")
+        pass
+    # 🚩🚩 닉네임 표시 로직 추가 완료 🚩🚩
+
     # --- HP 게이지 바 ---
     hp_bar_x, hp_bar_y = 10, 10
     hp_bar_width, hp_bar_height = 150, 20
