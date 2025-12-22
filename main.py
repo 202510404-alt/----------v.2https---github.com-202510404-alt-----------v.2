@@ -20,13 +20,14 @@ from entities.storm_projectile import StormProjectile
 from enemies.slime import Slime
 from enemies.mint_slime import MintSlime
 from enemies.shooter_slime import ShooterSlime
-from enemies.boss_slime import BossSlime
+from enemies.boss_slime import BossSlime 
 from enemies.boss_minion_slime import BossMinionSlime
 from weapons.bat_controller import BatController 
 
 # --- 전역 변수 설정 ---
 GAME_STATE_MENU = "MENU"
 GAME_STATE_PLAYING = "PLAYING"
+GAME_STATE_RANKING = "RANKING"
 
 player = None
 camera_obj = None
@@ -44,55 +45,72 @@ current_slime_max_hp = config.SLIME_INITIAL_BASE_HP
 slime_hp_increase_timer = 0
 game_state = GAME_STATE_MENU
 is_game_over_for_menu = False
-input_box = None        # 🚩 InputBox 전역 변수 추가
-is_name_entered = False # 🚩 이름 입력 상태 전역 변수 추가
+input_box = None        
+is_name_entered = False 
 
-# main.py - reset_game_state 함수 (최종 수정)
+# 랭킹 관련 전역 변수
+online_rankings = None
+current_rank_category_index = 0
+RANK_CATEGORIES = ["DifficultyScore", "Level", "Kills", "Bosses", "SurvivalTime"]
+
+# reset_game_state 함수 (게임 초기화)
 def reset_game_state():
     global player, camera_obj, slimes, daggers, exp_orbs, bats, slime_bullets, boss_slimes, storm_projectiles
     global slime_spawn_timer, current_slime_max_hp, slime_hp_increase_timer
-    global boss_active, is_game_over_for_menu, input_box, is_name_entered # 🚩 input_box와 is_name_entered 추가!
+    global boss_active, is_game_over_for_menu, input_box, is_name_entered, online_rankings
     
-    # 1. 닉네임 가져오기 (InputBox에서 텍스트를 읽어옵니다)
+    # 1. 닉네임 가져오기
     player_name_to_use = input_box.text if input_box and input_box.text else "익명 개발자" 
     
     # 2. Player 객체 생성 시 닉네임 전달
-    player = Player(config.MAP_WIDTH/2, config.MAP_HEIGHT/2, player_name_to_use) # 🚩 닉네임 인자 전달
+    player = Player(config.MAP_WIDTH/2, config.MAP_HEIGHT/2, player_name_to_use)
     
-    # 3. 나머지 초기화 로직 유지
+    # 3. 나머지 초기화 로직
     camera_obj = Camera(config.SCREEN_WIDTH, config.SCREEN_HEIGHT)
     slimes.clear(); daggers.clear(); exp_orbs.clear(); bats.clear(); slime_bullets.clear(); boss_slimes.clear(); storm_projectiles.clear()
     slime_spawn_timer = 0; current_slime_max_hp = config.SLIME_INITIAL_BASE_HP; slime_hp_increase_timer = 0
     player.is_selecting_upgrade = False; player.is_selecting_boss_reward = False
     boss_active = False; is_game_over_for_menu = False
     
-    # 4. InputBox 초기화 (재시작 시 닉네임을 다시 입력할 수 있도록)
+    # 4. InputBox 초기화
     if input_box:
         input_box.text = ""
         is_name_entered = False
+    
+    # 5. 랭킹 데이터 초기화
+    online_rankings = None
+
+# 랭킹 데이터 로드 함수
+async def load_rankings_data():
+    """랭킹 데이터를 비동기적으로 로드합니다."""
+    global online_rankings
+    online_rankings = None # 로딩 중 상태로 설정
+    online_rankings = utils.load_rankings_online()
+    print(f"랭킹 데이터 로드 완료. 항목 수: {len(online_rankings)}")
 
 
 async def main():
     global game_state, is_game_over_for_menu, slime_spawn_timer
     global current_slime_max_hp, slime_hp_increase_timer, boss_active
     global player, camera_obj, slimes, daggers, exp_orbs, bats, slime_bullets, boss_slimes, storm_projectiles
-    global input_box, is_name_entered # 🚩 InputBox 관련 global 변수 추가!
+    global input_box, is_name_entered
+    global online_rankings, current_rank_category_index, RANK_CATEGORIES
 
     pygame.init()
     screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
     pygame.display.set_caption("뱀파이어 서바이벌 v.2")
     clock = pygame.time.Clock()
 
-    # 🚩 InputBox 생성 (게임 시작 시 한 번)
+    # InputBox 생성
     input_box = ui.InputBox(
         (config.SCREEN_WIDTH // 2) - 150, 
         (config.SCREEN_HEIGHT // 2) + 100, 
         300, 
         50, 
-        text='' # 초기 텍스트 없음
+        text=''
     )
 
-    # 배경 이미지 로드 (경로 슬래시 / 사용)
+    # 배경 이미지 로드
     background_image = None
     bg_width, bg_height = 0, 0
     try:
@@ -105,6 +123,9 @@ async def main():
     running = True
     start_button_rect = pygame.Rect(0, 0, 200, 80)
     exit_button_rect = pygame.Rect(config.SCREEN_WIDTH - 50, 10, 40, 40)
+    ranking_button_rect = pygame.Rect(0, 0, 150, 60) 
+
+    ui.setup_ranking_buttons() # 랭킹 카테고리 버튼 위치 설정
 
     while running:
         dt = clock.tick(config.FPS) / 1000.0
@@ -113,28 +134,57 @@ async def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT: running = False
             
-# main.py (Line 120 근처 - 메인 루프 내부)
             if game_state == GAME_STATE_MENU:
                 
-                # 🚩🚩 닉네임 입력 처리 로직 수정 🚩🚩
+                # 닉네임 입력 처리
                 if not is_name_entered and input_box:
-                    enter_pressed = input_box.handle_event(event) # 🚩 enter_pressed는 엔터가 눌렸을 때만 True를 반환
+                    enter_pressed = input_box.handle_event(event)
                     
-                    if enter_pressed: # 엔터가 눌렸고, 이제 비활성화 상태가 되었을 때
+                    if enter_pressed: 
                         if input_box.text:
                             is_name_entered = True
                             print(f"닉네임 설정 완료: {input_box.text}")
-                        else: # 이름 없이 엔터 누르면 기본 이름으로 설정
+                        else:
                             input_box.text = "익명 개발자"
                             is_name_entered = True
                 
-                # 🚩🚩 시작 버튼 클릭 로직 수정 🚩🚩
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    # 시작 버튼은 is_name_entered가 True일 때만 활성화됩니다.
-                    if start_button_rect.collidepoint(mouse_pos) and is_name_entered: 
+                    # 게임 시작 버튼
+                    if start_button_rect.collidepoint(mouse_pos) and is_name_entered:
                         reset_game_state()
                         game_state = GAME_STATE_PLAYING
+                    
+                    # 랭킹 버튼
+                    elif ranking_button_rect.collidepoint(mouse_pos):
+                        game_state = GAME_STATE_RANKING 
+                        await load_rankings_data()
             
+            elif game_state == GAME_STATE_RANKING:
+                
+                # 랭킹 카테고리 전환 처리 (마우스)
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    for button_info in ui.RANKING_BUTTONS:
+                        if button_info['rect'].collidepoint(mouse_pos):
+                            try:
+                                # ui.RANKING_BUTTONS의 key를 사용하여 인덱스를 찾습니다.
+                                new_index = RANK_CATEGORIES.index(button_info['key']) 
+                                current_rank_category_index = new_index
+                                print(f"랭킹 카테고리 변경: {button_info['key']}")
+                            except ValueError:
+                                pass
+                
+                # 랭킹 카테고리 전환 처리 (키보드)
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        game_state = GAME_STATE_MENU
+                    
+                    elif event.key == pygame.K_LEFT or event.key == pygame.K_a:
+                        current_rank_category_index = (current_rank_category_index - 1) % len(RANK_CATEGORIES)
+                        print(f"랭킹 카테고리 변경: {RANK_CATEGORIES[current_rank_category_index]}")
+                    elif event.key == pygame.K_RIGHT or event.key == pygame.K_d:
+                        current_rank_category_index = (current_rank_category_index + 1) % len(RANK_CATEGORIES)
+                        print(f"랭킹 카테고리 변경: {RANK_CATEGORIES[current_rank_category_index]}")
+
             elif game_state == GAME_STATE_PLAYING:
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
@@ -147,8 +197,8 @@ async def main():
                         if removed_weapon_instance:
                             bats[:] = [bat for bat in bats if not (isinstance(bat, BatMinion) and bat.controller == removed_weapon_instance)]
                     elif player and player.is_selecting_boss_reward:
-                        if event.key == pygame.K_1: player.apply_chosen_boss_reward(0)
-                        elif event.key == pygame.K_2 and len(player.boss_reward_options_to_display)>1: player.apply_chosen_boss_reward(1)
+                        if event.key == pygame.K_1: removed_weapon_instance = player.apply_chosen_upgrade(0)
+                        elif event.key == pygame.K_2 and len(player.boss_reward_options_to_display)>1: removed_weapon_instance = player.apply_chosen_upgrade(1)
                         elif event.key == pygame.K_3 and len(player.boss_reward_options_to_display)>2: removed_weapon_instance = player.apply_chosen_upgrade(2)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                     if player and player.special_skill:
@@ -164,26 +214,19 @@ async def main():
 
                 if player.hp <= 0:
                     
-                    # 🚩 랭킹 저장 로직 삽입 시작 🚩
-                    
-                    # 1. 생존 시간 계산
+                    # 랭킹 저장 로직 
                     game_time_in_seconds = slime_hp_increase_timer / config.FPS 
                     current_difficulty_factor = current_slime_max_hp / config.SLIME_INITIAL_BASE_HP
 
-                    # 2. 저장할 데이터 준비
                     score_data = {
                         "level": player.level,
                         "kills": player.total_enemies_killed,
                         "bosses": player.total_bosses_killed,
-                        "time": game_time_in_seconds,
-                        "difficulty_factor": current_difficulty_factor
+                        "difficulty_score": current_difficulty_factor,
+                        "survival_time": game_time_in_seconds
                     }
                     
-                    # 3. 랭킹 저장 함수 호출 (utils.py에 있어야 함)
-                    utils.save_new_ranking(player.name, score_data)
-                    print(f"\n기록 저장 완료! 생존 시간: {game_time_in_seconds:.2f}초, 닉네임: {player.name}")
-                    
-                    # 🚩 랭킹 저장 로직 삽입 완료 🚩
+                    utils.save_new_ranking_online(player.name, score_data)
 
                     game_state = GAME_STATE_MENU; is_game_over_for_menu = True
                 
@@ -275,15 +318,30 @@ async def main():
 
         elif game_state == GAME_STATE_MENU:
             screen.fill(config.GREEN)
-            start_button_rect.center = (config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2)
-            ui.draw_main_menu(screen, start_button_rect, exit_button_rect, is_game_over_for_menu)
             
-            # 🚩🚩 닉네임 입력 상자 그리기 로직 추가 🚩🚩
-            # 이름이 입력되지 않았을 때만 입력창을 그립니다.
+            # 버튼 위치 설정
+            start_button_rect.center = (config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2)
+            ranking_button_rect.bottomleft = (10, config.SCREEN_HEIGHT - 10) # 🚩 왼쪽 아래 구석에 배치
+
+            ui.draw_main_menu(screen, start_button_rect, exit_button_rect, is_game_over_for_menu, ranking_button_rect) # 🚩 인자 추가
+            
+            # 닉네임 입력 상자 그리기
             if not is_name_entered and input_box:
                 input_box.draw(screen)
-            # 🚩🚩 닉네임 입력 상자 그리기 로직 추가 완료 🚩🚩
 
+       # main.py (Line 325 근처 - 랭킹 화면 그리기 블록)
+        elif game_state == GAME_STATE_RANKING: 
+            current_category = RANK_CATEGORIES[current_rank_category_index]
+            
+            # 랭킹 데이터를 로드합니다 (데이터가 None이 아니면 로딩 완료)
+            filtered_rankings = []
+            if online_rankings and isinstance(online_rankings, list):
+                filtered_rankings = [
+                    r for r in online_rankings 
+                    if isinstance(r, dict) and 'RankCategory' in r and r['RankCategory'] == current_category
+                ]
+            
+            ui.draw_ranking_screen(screen, filtered_rankings, current_category)
         pygame.display.flip()
         await asyncio.sleep(0) # 웹 브라우저를 위해 제어권 양보
 
