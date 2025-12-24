@@ -12,11 +12,14 @@ from enemies.boss_minion_slime import BossMinionSlime
 from entities.exp_orb import ExpOrb
 from entities.bat_minion import BatMinion
 
+# 랭킹 데이터 로드 함수
 async def load_rankings_data():
     """랭킹 데이터를 비동기적으로 로드합니다."""
-    state.online_rankings = None
-    state.online_rankings = utils.load_rankings_online()
-    print(f"랭킹 데이터 로드 완료.")
+    global online_rankings
+    state.online_rankings = None # 로딩 중 상태로 설정
+    # 🟢 1. await를 붙여서 실제 데이터가 올 때까지 기다립니다.
+    state.online_rankings = await utils.load_rankings_online() 
+    print(f"랭킹 데이터 로드 완료. 항목 수: {len(state.online_rankings)}")
 
 async def main():
     pygame.init()
@@ -108,6 +111,7 @@ async def main():
                 if state.player.hp <= 0:
                     score = {"levels": state.player.level, "kills": state.player.total_enemies_killed, "bosses": state.player.total_bosses_killed, "difficulty_score": state.current_slime_max_hp / config.SLIME_INITIAL_BASE_HP, "survival_time": state.slime_hp_increase_timer / config.FPS}
                     utils.save_new_ranking_online(state.player.name, score)
+                    await utils.save_new_ranking_online(state.player.name, score)
                     state.game_state = state.GAME_STATE_MENU; state.is_game_over_for_menu = True
                 
                 if state.game_state == state.GAME_STATE_PLAYING:

@@ -139,6 +139,6 @@ STORM_SKILL_DAMAGE_INCREASE = 25
 STORM_SKILL_COOLDOWN_DECREASE_SECONDS = 5
 # config.py (맨 아래 JSONBIN 설정 부분)
 
-# 🚩 JSONBIN.IO 설정 (최종 마스터 키 및 Bin URL 적용)
-JSONBIN_API_KEY = "$2a$10$7eC/WMxnHG69g8oVI1jBkOQWKu6jZF5eOtprIHYEcZx3RKq0veh4." # 🚩🚩 최종 마스터 키
+# 🚩 JSONBIN.IO 설정 (액새스 키 및 Bin URL 적용)
+JSONBIN_API_KEY = "$2a$10$IBlySXUeA89m4y/6k41oj.62t7JhRP6D9zcn8xL/Ovx0MJ3B33TZ." # 🚩🚩 액세스
 JSONBIN_BIN_URL = "https://api.jsonbin.io/v3/b/69001bb8ae596e708f31c2c5" # 🚩🚩 선생님의 Bin URL
