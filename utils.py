@@ -4,7 +4,7 @@ import asyncio
 import config
 import sys
 
-# 1. 환경 감지 및 브라우저 모듈 준비
+# 1. 환경 감지 및 브라우저 전용 모듈 준비
 IS_WEB = (sys.platform == "emscripten")
 js = None
 
@@ -15,9 +15,9 @@ if IS_WEB:
     except ImportError:
         pass
 
-# 🚩 [디버깅] 브라우저 콘솔(F12)과 파이썬 터미널에 동시에 로그를 찍습니다.
+# 🚩 [디버깅] 브라우저 콘솔(F12)에 로그를 찍습니다.
 def browser_log(msg, is_error=False):
-    full_msg = f"🚀 [Vampire-Fix] {msg}"
+    full_msg = f"🚀 [Vampire-Web] {msg}"
     if IS_WEB and js:
         if is_error:
             js.window.console.error(full_msg)
@@ -30,12 +30,12 @@ def browser_log(msg, is_error=False):
 RANK_CATEGORIES = ["Levels", "Kills", "Bosses", "DifficultyScore", "SurvivalTime"]
 
 # ----------------------------------------------------
-# 2. Supabase 통합 통신 함수 (가장 확실한 버전)
+# 2. Supabase 통합 통신 함수 (웹 환경 최적화)
 # ----------------------------------------------------
 async def _fetch_supabase(endpoint, method, data=None):
     url = f"{config.SUPABASE_URL}/rest/v1/{endpoint}"
     
-    # 🚩 모든 요청에 공통으로 들어가는 열쇠 세트
+    # 🚩 Supabase 전용 헤더
     headers = {
         "apikey": config.SUPABASE_KEY,
         "Authorization": f"Bearer {config.SUPABASE_KEY}",
@@ -44,11 +44,15 @@ async def _fetch_supabase(endpoint, method, data=None):
     }
 
     if IS_WEB:
-        # --- 웹 브라우저 (pyfetch) ---
+        # --- [웹 브라우저 환경] ---
         try:
-            await asyncio.sleep(0.01) # 브라우저에게 순서 양보 (멈춤 방지)
+            browser_log(f"통신 시작: {method} {url}")
+            # 브라우저가 다른 일을 할 수 있게 아주 잠깐 멈춤 (멈춤 현상 방지 핵심)
+            await asyncio.sleep(0.01)
+            
             body_content = json.dumps(data) if data else None
             
+            # 🚩 pyfetch를 사용하여 브라우저 네이티브 방식으로 요청
             response = await pyfetch(
                 url=url,
                 method=method,
@@ -57,46 +61,43 @@ async def _fetch_supabase(endpoint, method, data=None):
             )
             
             if response.status in [200, 201]:
-                return await response.string()
+                res_text = await response.string()
+                browser_log("통신 성공!")
+                return res_text
             else:
-                browser_log(f"API 에러 발생: {response.status}", is_error=True)
+                browser_log(f"API 에러: {response.status}", is_error=True)
                 return None
         except Exception as e:
-            browser_log(f"통신 중 뻗음: {str(e)}", is_error=True)
+            browser_log(f"치명적 오류: {str(e)}", is_error=True)
             return None
     else:
-        # --- 로컬 노트북 (urllib) ---
+        # --- [로컬 윈도우 환경] ---
         import urllib.request
         try:
             req_data = json.dumps(data).encode('utf-8') if data else None
-            # 🚩 윈도우 파이썬에서 헤더를 확실히 실어 보냅니다.
             req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
             with urllib.request.urlopen(req) as res:
                 return res.read().decode('utf-8')
-        except urllib.error.HTTPError as e:
-            error_msg = e.read().decode('utf-8')
-            print(f"!!! [DB 에러] {e.code}: {error_msg} !!!")
-            return None
         except Exception as e:
-            print(f"!!! [로컬 에러] {e} !!!")
+            print(f"LOCAL ERROR: {e}")
             return None
 
 # ----------------------------------------------------
-# 3. 랭킹 로드 (필터링 로직 포함)
+# 3. 랭킹 로드 (Supabase -> UI 데이터 변환)
 # ----------------------------------------------------
 async def load_rankings_online():
-    browser_log("랭킹 데이터를 가져오는 중...")
-    # 🚩 컬럼명 오류 방지를 위해 정렬 없이 다 가져오기
+    browser_log("랭킹 로드 시도...")
+    # 정렬 없이 가져오기 (대소문자 문제 방지)
     data_str = await _fetch_supabase("rankings?select=*", 'GET')
     
     formatted_list = []
     if data_str:
         try:
             raw_list = json.loads(data_str)
-            browser_log(f"서버 데이터 확인 완료 ({len(raw_list)}개)")
+            browser_log(f"데이터 {len(raw_list)}개 수신 완료")
             for row in raw_list:
                 for cat in RANK_CATEGORIES:
-                    # Supabase 컬럼(소문자) -> UI 데이터(카멜케이스) 변환
+                    # DB 컬럼(소문자) -> UI 데이터 변환
                     db_col = cat.lower().replace("score", "_score").replace("time", "_time")
                     formatted_list.append({
                         "ID": row.get("name", "익명"),
@@ -113,7 +114,7 @@ async def load_rankings_online():
 # 4. 랭킹 저장
 # ----------------------------------------------------
 async def save_new_ranking_online(name, score_data):
-    browser_log(f"[{name}] 점수 서버 전송 시도...")
+    browser_log(f"점수 저장 중: {name}")
     new_row = {
         "name": str(name),
         "levels": int(score_data.get('levels', 0)),
@@ -122,15 +123,14 @@ async def save_new_ranking_online(name, score_data):
         "difficulty_score": float(score_data.get('difficulty_score', 0.0)),
         "survival_time": float(score_data.get('survival_time', 0.0))
     }
-    
     res = await _fetch_supabase("rankings", 'POST', data=new_row)
     if res:
-        browser_log("✅ 서버 저장 성공!")
+        browser_log("서버 저장 완료!")
         return True
     return False
 
 # ----------------------------------------------------
-# 5. 필수 수학 유틸리티 (절대 삭제 금지!)
+# 5. 필수 수학 유틸리티 (절대 삭제 금지)
 # ----------------------------------------------------
 def get_wrapped_delta(val1, val2, map_dim):
     delta = val2 - val1
