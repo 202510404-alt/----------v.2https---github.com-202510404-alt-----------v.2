@@ -40,7 +40,7 @@ class BossSlime(Slime):
                 print("!!! 보스 각성: 진정한 힘을 개방합니다 !!!")
                 self.is_phase2 = True
                 self.stop_timer = config.FPS * 1.5 # 1.5초간 기 모으기 (멈춤)
-                self.hp = self.max_hp * 0.5        # 체력 50%까지 즉시 회복
+                self.hp = self.max_hp * 0.7        # 체력 70%까지 즉시 회복
                 self.speed *= config.BOSS_PHASE2_SPEED_MULT # 속도 1.2배 증가
 
         # 각성 연출 중에는 이동/공격 정지
