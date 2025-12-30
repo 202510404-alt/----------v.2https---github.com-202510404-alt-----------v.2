@@ -8,10 +8,13 @@ class StormSkill:
         self.player = player_ref
         self.name = "태풍"
         self.level = 1
-        self.base_damage = config.STORM_SKILL_BASE_DAMAGE
+        
+        # config의 최신 수치로 초기 상태 설정
+        self.current_damage = config.STORM_SKILL_BASE_DAMAGE
+        self.current_radius = config.STORM_PROJECTILE_RADIUS
         self.cooldown = config.STORM_SKILL_COOLDOWN_SECONDS * config.FPS
         self.cooldown_timer = self.cooldown
-        self.num_projectiles = 1
+        self.num_projectiles = config.STORM_SKILL_INITIAL_NUM
 
     def update(self):
         if self.cooldown_timer < self.cooldown:
@@ -23,31 +26,69 @@ class StormSkill:
             storm_list = game_entities_lists.get('storm_projectiles')
             if storm_list is None: return
 
-            # 플레이어가 현재 보고 있는 방향을 기준으로 발사
             center_angle = self.player.facing_angle
             
+            # 발사 각도 계산 (부채꼴 형태)
             if self.num_projectiles == 1:
                 angles = [center_angle]
             else:
-                total_spread = math.radians(120) # 120도 부채꼴 범위로 발사
+                total_spread = math.radians(120)
                 angle_step = total_spread / (self.num_projectiles - 1)
                 start_angle = center_angle - total_spread / 2
                 angles = [start_angle + i * angle_step for i in range(self.num_projectiles)]
 
             for angle in angles:
-                # 🚩 투사체 생성 (데미지는 투사체 내부에서 20으로 처리하지만 인자로도 전달)
-                storm_list.append(StormProjectile(self.player.world_x, self.player.world_y, angle, 20))
+                # 강화된 수치를 적용하여 투사체 생성
+                storm_list.append(StormProjectile(
+                    self.player.world_x, self.player.world_y, 
+                    angle, self.current_damage, self.current_radius
+                ))
 
     def generate_upgrade_options(self):
-        options = [
-            {"text": f"폭풍 개수 증가 ({self.num_projectiles} -> {self.num_projectiles+1})", "type": "num_projectiles", "value": self.num_projectiles+1},
-            {"text": f"범위 증가 (반지름 {int(config.STORM_PROJECTILE_RADIUS)} -> {int(config.STORM_PROJECTILE_RADIUS*1.2)})", "type": "range", "value": 1.2},
-            {"text": "쿨타임 감소", "type": "cooldown", "value": max(config.FPS*5, self.cooldown - config.STORM_SKILL_COOLDOWN_DECREASE_SECONDS*config.FPS)}
-        ]
-        return options
+        pool = []
+        
+        # 1. 폭풍 개수 증가 (최대치 제한)
+        if self.num_projectiles < config.STORM_SKILL_MAX_NUM:
+            pool.append({
+                "text": f"폭풍 개수 증가 ({self.num_projectiles} -> {self.num_projectiles + 1})", 
+                "type": "num_projectiles", 
+                "value": self.num_projectiles + 1
+            })
+
+        # 2. 데미지 증가 (제한 없음)
+        pool.append({
+            "text": f"데미지 증가 ({self.current_damage} -> {self.current_damage + config.STORM_SKILL_DAMAGE_UPGRADE})", 
+            "type": "damage", 
+            "value": self.current_damage + config.STORM_SKILL_DAMAGE_UPGRADE
+        })
+
+        # 3. 범위 증가 (제한 없음)
+        pool.append({
+            "text": f"범위 증가 ({int(self.current_radius)} -> {int(self.current_radius * config.STORM_SKILL_RADIUS_UPGRADE_MULT)})", 
+            "type": "range", 
+            "value": self.current_radius * config.STORM_SKILL_RADIUS_UPGRADE_MULT
+        })
+
+        # 4. 쿨타임 감소 (최소치 제한: 10초)
+        min_cooldown_frames = config.STORM_SKILL_MIN_COOLDOWN_SECONDS * config.FPS
+        if self.cooldown > min_cooldown_frames:
+            pool.append({
+                "text": "쿨타임 감소", 
+                "type": "cooldown", 
+                "value": max(min_cooldown_frames, 
+                             self.cooldown - config.STORM_SKILL_COOLDOWN_DECREASE_SECONDS * config.FPS)
+            })
+        
+        return pool
 
     def apply_upgrade(self, upgrade_info):
-        if upgrade_info["type"] == "num_projectiles": self.num_projectiles = upgrade_info["value"]
-        elif upgrade_info["type"] == "range": pass # config 상수를 직접 건드리거나 projectile에서 배율 적용 필요
-        elif upgrade_info["type"] == "cooldown": self.cooldown = upgrade_info["value"]
+        # 업그레이드 선택 결과 반영
+        if upgrade_info["type"] == "num_projectiles": 
+            self.num_projectiles = upgrade_info["value"]
+        elif upgrade_info["type"] == "damage":
+            self.current_damage = upgrade_info["value"]
+        elif upgrade_info["type"] == "range":
+            self.current_radius = upgrade_info["value"]
+        elif upgrade_info["type"] == "cooldown":
+            self.cooldown = upgrade_info["value"]
         self.level += 1
