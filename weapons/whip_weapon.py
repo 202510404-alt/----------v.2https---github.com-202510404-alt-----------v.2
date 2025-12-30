@@ -1,141 +1,160 @@
-# weapons/whip_weapon.py (그리드 최적화 버전)
 import random
 import math
 import pygame
 import config
 import utils
 from weapons.base_weapon import Weapon
-from core.grid import enemy_grid # 🟢 그리드 엔진 임포트 추가
+from core.grid import enemy_grid
 
 class WhipWeapon(Weapon):
     def __init__(self, player_ref):
         super().__init__(player_ref)
         self.name = "채찍"
         self.damage = 5
-        self.knockback_strength = 45
-        self.attack_reach = 130
-        self.attack_angle_range = math.pi
-        self.cooldown = config.FPS*0.75
+        self.knockback_strength = 50
+        self.attack_reach = 140
+        self.attack_angle_range = math.pi # 180도 (반원)
+        self.cooldown = config.FPS * 0.7 # 공격 주기
         self.attack_timer = self.cooldown
+        
         self.is_attacking = False
-        self.attack_animation_timer = 0
-        self.attack_animation_duration = config.FPS*0.2
-        self.current_attack_start_angle_on_screen = 0
-        self.hit_slimes_this_attack = set()
-        # 🟢 탐색 범위: 공격 범위(130)를 커버하기 위해 1칸 청크(250)면 충분
+        self.attack_animation_duration = 10 # 휘두르는 시간 (프레임 단위, 낮을수록 빠름)
+        self.animation_frame = 0
+        
+        self.start_angle = 0 # 이번 공격의 시작 각도
+        self.hit_slimes_this_attack = set() # 이번 휘두르기에 이미 맞은 적들 목록
         self.target_search_radius_cells = 1 
 
     def update(self, slimes_list, game_entities_lists):
-        if self.is_attacking:
-            self.attack_animation_timer-=1
-            if self.attack_animation_timer<=0: self.is_attacking=False
+        self.attack_timer += 1
         
-        self.attack_timer+=1
-        if self.attack_timer>=self.cooldown and not self.is_attacking:
+        # 1. 공격 시작 판단 (쿨타임 끝났을 때)
+        if self.attack_timer >= self.cooldown and not self.is_attacking:
+            player_wx, player_wy = self.player.world_x, self.player.world_y
+            nearby = enemy_grid.get_nearby_enemies(player_wx, player_wy, self.target_search_radius_cells)
             
-            # 🟢 1단계 렉 제거: 전체 적이 아닌 주변 적만 가져오기
-            player_wx,player_wy=self.player.world_x,self.player.world_y
-            # 주변 1칸 청크의 적들만 가져와서 검사 (search_radius_cells=1)
-            nearby_enemies = enemy_grid.get_nearby_enemies(player_wx, player_wy, self.target_search_radius_cells)
-            living_slimes=[s for s in nearby_enemies if s.hp>0] # 주변 적들 중에서만 살아있는 적 필터링
+            # 조준 로직: 가장 가까운 적 방향으로 휘두르기 시작
+            closest_s, min_d2 = None, float('inf')
+            for s in nearby:
+                if s.hp <= 0: continue
+                d2 = utils.distance_sq_wrapped(player_wx, player_wy, s.world_x, s.world_y, config.MAP_WIDTH, config.MAP_HEIGHT)
+                if d2 < min_d2: min_d2 = d2; closest_s = s
             
-            closest_slime,min_dist_sq=None,float('inf')
-            
-            # 🟢 타겟 검색 (주변 적들만 대상으로 루프)
-            if living_slimes:
-                for slime_candidate in living_slimes:
-                    dist_sq=utils.distance_sq_wrapped(player_wx,player_wy,slime_candidate.world_x,slime_candidate.world_y,config.MAP_WIDTH,config.MAP_HEIGHT)
-                    if dist_sq<min_dist_sq: min_dist_sq=dist_sq; closest_slime=slime_candidate
-            
-            target_angle_rad=0
-            # ... (이하 타겟 각도 계산 로직 동일) ...
-            if closest_slime and min_dist_sq<(self.attack_reach*2)**2:
-                dx_to_slime=utils.get_wrapped_delta(player_wx,closest_slime.world_x,config.MAP_WIDTH)
-                dy_to_slime=utils.get_wrapped_delta(player_wy,closest_slime.world_y,config.MAP_HEIGHT)
-                if not (dx_to_slime==0 and dy_to_slime==0): target_angle_rad=math.atan2(dy_to_slime,dx_to_slime)
+            if closest_s:
+                dx = utils.get_wrapped_delta(player_wx, closest_s.world_x, config.MAP_WIDTH)
+                dy = utils.get_wrapped_delta(player_wy, closest_s.world_y, config.MAP_HEIGHT)
+                target_mid_angle = math.atan2(dy, dx)
             else:
-                player_moved_dx=utils.get_wrapped_delta(self.player.prev_world_x,self.player.world_x,config.MAP_WIDTH)
-                player_moved_dy=utils.get_wrapped_delta(self.player.prev_world_y,self.player.world_y,config.MAP_HEIGHT)
-                if not (player_moved_dx==0 and player_moved_dy==0): target_angle_rad=math.atan2(player_moved_dy,player_moved_dx)
-                else: target_angle_rad=self.current_attack_start_angle_on_screen+self.attack_angle_range/2
+                # 적이 없으면 플레이어가 움직이는 방향, 그것도 없으면 마지막 각도 유지
+                p_dx = utils.get_wrapped_delta(self.player.prev_world_x, self.player.world_x, config.MAP_WIDTH)
+                p_dy = utils.get_wrapped_delta(self.player.prev_world_y, self.player.world_y, config.MAP_HEIGHT)
+                if p_dx != 0 or p_dy != 0:
+                    target_mid_angle = math.atan2(p_dy, p_dx)
+                else:
+                    target_mid_angle = self.start_angle + (self.attack_angle_range / 2)
             
-            self.attack_timer=0; self.is_attacking=True; self.attack_animation_timer=self.attack_animation_duration
-            self.current_attack_start_angle_on_screen=target_angle_rad-(self.attack_angle_range/2)
+            # 공격 상태로 전환
+            self.is_attacking = True
+            self.animation_frame = 0
+            self.attack_timer = 0
+            # 반원의 시작 각도 설정 (시계 반대 방향으로 휘두름)
+            self.start_angle = target_mid_angle - (self.attack_angle_range / 2)
             self.hit_slimes_this_attack.clear()
 
-            # 🟢 2단계 렉 제거: 충돌 처리도 주변 적들만 대상으로 루프
-            for slime in living_slimes: # 🚩 전체 적이 아닌 living_slimes (주변 적)만 대상으로 변경
-                if slime in self.hit_slimes_this_attack: continue
+        # 2. 휘두르는 중 (선과 적의 충돌 판정)
+        if self.is_attacking:
+            self.animation_frame += 1
+            progress = self.animation_frame / self.attack_animation_duration # 0.0 ~ 1.0
+            
+            if progress > 1.0:
+                self.is_attacking = False
+                return
+
+            # 🚩 [핵심] 현재 프레임에서 채찍 선의 각도
+            current_line_angle = self.start_angle + (self.attack_angle_range * progress)
+            
+            player_wx, player_wy = self.player.world_x, self.player.world_y
+            nearby = enemy_grid.get_nearby_enemies(player_wx, player_wy, self.target_search_radius_cells)
+            
+            # 현재 채찍 선의 방향 벡터 (길이 1인 단위 벡터)
+            line_vec_x = math.cos(current_line_angle)
+            line_vec_y = math.sin(current_line_angle)
+
+            reach_sq = (self.attack_reach + 20)**2 # 충돌 반경 보정
+            
+            for s in nearby:
+                if s.hp <= 0 or s in self.hit_slimes_this_attack: continue
                 
-                # ... (이하 충돌 및 각도 계산 로직 동일) ...
-                dist_sq_to_slime=utils.distance_sq_wrapped(player_wx,player_wy,slime.world_x,slime.world_y,config.MAP_WIDTH,config.MAP_HEIGHT)
-                if dist_sq_to_slime<=(self.attack_reach+slime.radius)**2:
-                    dx_s=utils.get_wrapped_delta(player_wx,slime.world_x,config.MAP_WIDTH); dy_s=utils.get_wrapped_delta(player_wy,slime.world_y,config.MAP_HEIGHT)
-                    angle_to_slime_rad=self.current_attack_start_angle_on_screen if dx_s==0 and dy_s==0 else math.atan2(dy_s,dx_s)
-                    norm_start_angle=self.current_attack_start_angle_on_screen%(2*math.pi)
-                    norm_slime_angle=angle_to_slime_rad%(2*math.pi)
-                    norm_end_angle=(self.current_attack_start_angle_on_screen+self.attack_angle_range)%(2*math.pi)
-                    in_angle=False
-                    if norm_start_angle<=norm_end_angle:
-                        if norm_start_angle<=norm_slime_angle<=norm_end_angle: in_angle=True
-                    else:
-                        if norm_start_angle<=norm_slime_angle or norm_slime_angle<=norm_end_angle: in_angle=True
+                # 래핑 맵 거리 계산
+                dx = utils.get_wrapped_delta(player_wx, s.world_x, config.MAP_WIDTH)
+                dy = utils.get_wrapped_delta(player_wy, s.world_y, config.MAP_HEIGHT)
+                dist_sq = dx*dx + dy*dy
+                
+                if dist_sq <= reach_sq:
+                    # 🚩 [벡터 내적 판정] 적이 현재 채찍 선 위에 있는지 확인
+                    # dist_sq가 0인 경우(플레이어와 겹침) 예외 처리
+                    dist = math.sqrt(dist_sq) if dist_sq > 0 else 1
+                    
+                    # 적의 방향 벡터와 채찍 선의 방향 벡터의 내적
+                    # 두 벡터가 거의 일치하면(1.0에 가까우면) 선 위에 있는 것임
+                    dot = (dx/dist) * line_vec_x + (dy/dist) * line_vec_y
+                    
+                    # 0.98 이상이면 약 11도 이내의 오차 (선 두께 역할)
+                    if dot > 0.98: 
+                        s.take_damage(self.damage)
+                        self.hit_slimes_this_attack.add(s)
+                        # 넉백 처리
+                        s.world_x = (s.world_x + line_vec_x * self.knockback_strength) % config.MAP_WIDTH
+                        s.world_y = (s.world_y + line_vec_y * self.knockback_strength) % config.MAP_HEIGHT
 
-                    if in_angle:
-                        slime.take_damage(self.damage); self.hit_slimes_this_attack.add(slime)
-                        if slime.hp>0:
-                            dist_to_slime=math.sqrt(dist_sq_to_slime) if dist_sq_to_slime>0 else 1
-                            norm_kb_dx=dx_s/dist_to_slime; norm_kb_dy=dy_s/dist_to_slime
-                            slime.world_x=(slime.world_x+norm_kb_dx*self.knockback_strength)%config.MAP_WIDTH
-                            slime.world_y=(slime.world_y+norm_kb_dy*self.knockback_strength)%config.MAP_HEIGHT
-                            slime.rect.center=(int(slime.world_x),int(slime.world_y))
-
-            # 적 발사체와의 충돌 (이것도 주변 발사체로 최적화 가능하지만, 일단 놔둡니다)
-            slime_bullets_list_ref = game_entities_lists.get('slime_bullets')
-            if slime_bullets_list_ref and self.is_attacking:
-                for sb in slime_bullets_list_ref:
-                    # ... (발사체 충돌 로직은 렉이 덜하므로 그대로 유지) ...
-                    if sb.is_hit_by_player_attack: continue
-                    dist_sq_to_bullet = utils.distance_sq_wrapped(player_wx, player_wy, sb.world_x, sb.world_y, config.MAP_WIDTH, config.MAP_HEIGHT)
-                    if dist_sq_to_bullet <= (self.attack_reach + sb.size)**2:
-                        dx_b = utils.get_wrapped_delta(player_wx, sb.world_x, config.MAP_WIDTH)
-                        dy_b = utils.get_wrapped_delta(player_wy, sb.world_y, config.MAP_HEIGHT)
-                        angle_to_bullet_rad = self.current_attack_start_angle_on_screen if dx_b == 0 and dy_b == 0 else math.atan2(dy_b, dx_b)
-                        norm_start_angle_whip = self.current_attack_start_angle_on_screen % (2 * math.pi)
-                        norm_bullet_angle = angle_to_bullet_rad % (2 * math.pi)
-                        norm_end_angle_whip = (self.current_attack_start_angle_on_screen + self.attack_angle_range) % (2 * math.pi)
-                        in_angle_bullet = False
-                        if norm_start_angle_whip <= norm_end_angle_whip:
-                            if norm_start_angle_whip <= norm_bullet_angle <= norm_end_angle_whip: in_angle_bullet = True
-                        else:
-                            if norm_start_angle_whip <= norm_bullet_angle or norm_bullet_angle <= norm_end_angle_whip: in_angle_bullet = True
-                        if in_angle_bullet:
-                            sb.is_hit_by_player_attack = True
+            # 적 발사체도 선에 닿으면 지워버리기
+            bullets = game_entities_lists.get('slime_bullets', [])
+            for sb in bullets:
+                if sb.is_hit_by_player_attack: continue
+                bdx = utils.get_wrapped_delta(player_wx, sb.world_x, config.MAP_WIDTH)
+                bdy = utils.get_wrapped_delta(player_wy, sb.world_y, config.MAP_HEIGHT)
+                b_dist_sq = bdx*bdx + bdy*bdy
+                if b_dist_sq <= reach_sq:
+                    b_dist = math.sqrt(b_dist_sq) if b_dist_sq > 0 else 1
+                    if ((bdx/b_dist) * line_vec_x + (bdy/b_dist) * line_vec_y) > 0.98:
+                        sb.is_hit_by_player_attack = True
 
     def draw(self, surface, camera_offset_x, camera_offset_y):
         if self.is_attacking:
-            player_screen_x,player_screen_y=config.SCREEN_WIDTH//2,config.SCREEN_HEIGHT//2
-            arc_visual_reach=self.attack_reach; points=[(player_screen_x,player_screen_y)]; num_segments=20
-            for i in range(num_segments+1):
-                angle=self.current_attack_start_angle_on_screen+(self.attack_angle_range*i/num_segments)
-                x=player_screen_x+arc_visual_reach*math.cos(angle); y=player_screen_y+arc_visual_reach*math.sin(angle)
-                points.append((x,y))
-            if len(points)>=3:
-                temp_surface=pygame.Surface((config.SCREEN_WIDTH,config.SCREEN_HEIGHT),pygame.SRCALPHA)
-                try: pygame.draw.polygon(temp_surface,config.WHIP_TRANSPARENT_COLOR,points)
-                except TypeError: pygame.draw.polygon(temp_surface,config.WHIP_TRANSPARENT_COLOR,[(int(p[0]),int(p[1])) for p in points])
-                surface.blit(temp_surface,(0,0))
+            # 현재 진행도에 따른 각도 계산
+            progress = self.animation_frame / self.attack_animation_duration
+            current_line_angle = self.start_angle + (self.attack_angle_range * progress)
+            
+            # 화면 중심(플레이어 위치)
+            px, py = config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2
+            
+            # 채찍 선의 끝점 계산
+            ex = px + self.attack_reach * math.cos(current_line_angle)
+            ey = py + self.attack_reach * math.sin(current_line_angle)
+            
+            # 1. 메인 채찍 선 (하얀색)
+            pygame.draw.line(surface, config.WHITE, (px, py), (ex, ey), 4)
+            
+            # 2. 끝부분 강조 (강렬한 노란색 원)
+            pygame.draw.circle(surface, config.YELLOW, (int(ex), int(ey)), 6)
+            
+            # 3. 아주 얇은 잔상 (선택 사항: 시각적 부드러움 추가)
+            prev_angle = self.start_angle + (self.attack_angle_range * (max(0, self.animation_frame - 1) / self.attack_animation_duration))
+            px2, py2 = px + self.attack_reach * math.cos(prev_angle), py + self.attack_reach * math.sin(prev_angle)
+            pygame.draw.line(surface, (200, 200, 0), (px, py), (px2, py2), 2)
 
     def get_level_up_options(self):
-        options=[{"text":f"데미지 ({self.damage} -> {self.damage+3})","type":"damage","value":self.damage+3},
-                 {"text":f"넉백 ({self.knockback_strength} -> {self.knockback_strength+12})","type":"knockback","value":self.knockback_strength+12},
-                 {"text":f"사거리 ({self.attack_reach} -> {self.attack_reach+25})","type":"reach","value":self.attack_reach+25},
-                 {"text":f"공속 (쿨다운 {self.cooldown/config.FPS:.2f}초 -> {max(config.FPS*0.2,self.cooldown-config.FPS*0.1)/config.FPS:.2f}초)","type":"cooldown","value":max(config.FPS*0.2,self.cooldown-config.FPS*0.1)}]
-        return random.sample(options,min(len(options),2))
+        options = [
+            {"text": f"데미지 ({self.damage} -> {self.damage+3})", "type": "damage", "value": self.damage+3},
+            {"text": f"넉백 ({self.knockback_strength} -> {self.knockback_strength+15})", "type": "knockback", "value": self.knockback_strength+15},
+            {"text": f"사거리 ({self.attack_reach} -> {self.attack_reach+20})", "type": "reach", "value": self.attack_reach+20},
+            {"text": f"공속 (쿨다운 줄임)", "type": "cooldown", "value": max(config.FPS*0.1, self.cooldown - 5)}
+        ]
+        return random.sample(options, min(len(options), 2))
 
     def apply_upgrade(self, upgrade_info):
-        if upgrade_info["type"]=="damage":self.damage=upgrade_info["value"]
-        elif upgrade_info["type"]=="knockback":self.knockback_strength=upgrade_info["value"]
-        elif upgrade_info["type"]=="reach":self.attack_reach=upgrade_info["value"]
-        elif upgrade_info["type"]=="cooldown":self.cooldown=upgrade_info["value"]
-        self.level+=1
+        if upgrade_info["type"] == "damage": self.damage = upgrade_info["value"]
+        elif upgrade_info["type"] == "knockback": self.knockback_strength = upgrade_info["value"]
+        elif upgrade_info["type"] == "reach": self.attack_reach = upgrade_info["value"]
+        elif upgrade_info["type"] == "cooldown": self.cooldown = upgrade_info["value"]
+        self.level += 1

@@ -210,12 +210,17 @@ async def main():
             rank_btn.bottomleft = (10, config.SCREEN_HEIGHT - 10)
             ui.draw_main_menu(screen, start_btn, exit_btn, state.is_game_over_for_menu, rank_btn)
             if not state.is_name_entered: state.input_box.draw(screen)
-
+            
         elif state.game_state == state.GAME_STATE_RANKING:
             cat = state.RANK_CATEGORIES[state.current_rank_category_index]
+            # 1. 카테고리에 맞는 데이터 필터링
             filtered = [r for r in (state.online_rankings or []) if r.get('RankCategory') == cat]
+            
+            # 🚩 [이 줄을 추가하세요!] 점수(RankValue)가 높은 순서대로 줄 세우기
+            filtered.sort(key=lambda x: x.get('RankValue', 0), reverse=True)
+            
+            # 2. 정렬된 데이터를 화면에 그리기
             ui.draw_ranking_screen(screen, filtered, cat)
-
         pygame.display.flip()
         # 🚩 웹에서 비동기 작업을 처리할 수 있게 하는 핵심 한 줄
         await asyncio.sleep(0) 
