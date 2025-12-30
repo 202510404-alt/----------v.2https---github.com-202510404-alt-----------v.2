@@ -31,8 +31,11 @@ class Player(pygame.sprite.Sprite):
         self.exp = 0
         self.exp_to_level_up = config.PLAYER_INITIAL_EXP_TO_LEVEL_UP
         
-        # 🟢 [추가] 플레이어가 마지막으로 바라본 각도 (기본은 오른쪽: 0도)
+        # 플레이어가 마지막으로 바라본 각도 (기본은 오른쪽: 0도)
         self.facing_angle = 0.0
+        
+        # 경험치 배수 초기화 (1.0배로 시작)
+        self.exp_multiplier = 1.0
         
         self.active_weapons = []
         self.shake_intensity = 0.0
@@ -76,7 +79,7 @@ class Player(pygame.sprite.Sprite):
         if keys[pygame.K_UP]: dy = -config.PLAYER_SPEED
         if keys[pygame.K_DOWN]: dy = config.PLAYER_SPEED
 
-        # 🟢 [핵심] 움직임이 있을 때만 보는 방향 업데이트
+        # 움직임이 있을 때만 보는 방향 업데이트
         if dx != 0 or dy != 0:
             self.facing_angle = math.atan2(dy, dx)
 
@@ -100,11 +103,13 @@ class Player(pygame.sprite.Sprite):
 
     def gain_exp(self, amount):
         if self.hp <= 0 or self.is_selecting_upgrade or self.is_selecting_boss_reward: return
-        self.exp += amount
+        
+        # 경험치 획득 시 배수 적용
+        self.exp += amount * self.exp_multiplier
         self.check_level_up()
 
     def check_level_up(self):
-        if self.exp >= self.exp_to_level_up:
+        while self.exp >= self.exp_to_level_up: # 연속 레벨업 가능하도록 while 사용
             self.exp -= self.exp_to_level_up
             self.level += 1
             self.exp_to_level_up = math.ceil(self.exp_to_level_up * 1.5)
@@ -116,20 +121,27 @@ class Player(pygame.sprite.Sprite):
     def generate_upgrade_options(self):
         self.upgrade_options_to_display = []
         pool = []
-        # (기본 무기/업그레이드 로직은 동일하므로 생략)
+        
+        # 새로운 무기 획득 옵션
         available_for_new = [wt for wt in self.available_new_weapons if not any(isinstance(aw, wt) for aw in self.active_weapons)]
         if available_for_new:
             chosen = random.choice(available_for_new)
             pool.append({"text": f"새 무기: {chosen(self).name}", "type": "new_weapon", "weapon_class": chosen})
+        
+        # 기존 무기 강화 옵션
         for wpn in self.active_weapons:
             opts = wpn.get_level_up_options()
             for o in opts:
                 pool.append({"text": f"{wpn.name} 업그레이드: {o['text']}", "type": "existing_weapon_upgrade", "weapon_instance": wpn, "upgrade_details": o})
-        if not pool: pool.append({"text": "최대 HP +20 증가", "type": "stat_hp", "value": 20})
+        
+        # 옵션이 부족할 경우 스탯 강화
+        if not pool: 
+            pool.append({"text": "최대 HP +20 증가", "type": "stat_hp", "value": 20})
+            
         self.upgrade_options_to_display = random.sample(pool, min(len(pool), 3))
 
     def apply_chosen_upgrade(self, option_index):
-        if not (self.is_selecting_upgrade and 0 <= option_index < len(self.upgrade_options_to_display)): return
+        if not (self.is_selecting_upgrade and 0 <= option_index < len(self.upgrade_options_to_display)): return None
         chosen = self.upgrade_options_to_display[option_index]
         removed = None
         if chosen["type"] == "new_weapon": removed = self.acquire_new_weapon(chosen["weapon_class"])
@@ -141,6 +153,10 @@ class Player(pygame.sprite.Sprite):
         return removed
 
     def trigger_boss_reward_selection(self):
+        # 보스 처치 시 경험치 배수 1.5배 영구 증가
+        self.exp_multiplier *= 1.5
+        utils.browser_debug(f"보스 처치! 현재 경험치 배수: {self.exp_multiplier:.2f}배")
+        
         if not self.special_skill:
              self.special_skill = StormSkill(self)
              print("태풍 획득! Z키로 발사!")
@@ -149,7 +165,8 @@ class Player(pygame.sprite.Sprite):
             self.boss_reward_options_to_display = self.special_skill.generate_upgrade_options()
 
     def apply_chosen_boss_reward(self, option_index):
-        if self.is_selecting_boss_reward:
+        # 🚩 4번째 선택지(index 3)를 포함하여 선택 가능하도록 수정
+        if self.is_selecting_boss_reward and 0 <= option_index < len(self.boss_reward_options_to_display):
             opt = self.boss_reward_options_to_display[option_index]
             self.special_skill.apply_upgrade(opt)
             self.is_selecting_boss_reward = False

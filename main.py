@@ -87,7 +87,6 @@ async def main():
                     elif rank_btn.collidepoint(mouse_pos):
                         utils.browser_debug("랭킹 버튼 클릭됨")
                         state.game_state = state.GAME_STATE_RANKING
-                        # 🚩 await 대신 task를 써야 게임이 안 멈춤
                         asyncio.create_task(load_rankings_data()) 
             
             # [랭킹 상태]
@@ -101,6 +100,7 @@ async def main():
 
             # [게임 플레이 상태]
             elif state.game_state == state.GAME_STATE_PLAYING:
+                # 1. 키보드 입력 처리
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_z:
                         if state.player and state.player.special_skill:
@@ -109,11 +109,13 @@ async def main():
                     if event.key == pygame.K_m: state.game_state = state.GAME_STATE_INVENTORY
                     elif event.key == pygame.K_ESCAPE: state.game_state = state.GAME_STATE_MENU
                     
+                    # 업그레이드 선택 (K_4 추가)
                     elif state.player.is_selecting_boss_reward or state.player.is_selecting_upgrade:
                         choice = -1
                         if event.key == pygame.K_1: choice = 0
                         elif event.key == pygame.K_2: choice = 1
                         elif event.key == pygame.K_3: choice = 2
+                        elif event.key == pygame.K_4: choice = 3  # 4번째 선택지 인식
                         
                         if choice != -1:
                             if state.player.is_selecting_boss_reward:
@@ -122,6 +124,24 @@ async def main():
                                 removed = state.player.apply_chosen_upgrade(choice)
                                 if removed:
                                     state.bats[:] = [b for b in state.bats if not (isinstance(b, BatMinion) and b.controller == removed)]
+
+                # 2. 마우스 클릭(터치) 입력 처리 추가
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if state.player.is_selecting_boss_reward or state.player.is_selecting_upgrade:
+                        mx, my = mouse_pos
+                        options_count = len(state.player.boss_reward_options_to_display) if state.player.is_selecting_boss_reward else len(state.player.upgrade_options_to_display)
+                        
+                        for i in range(options_count):
+                            # UI에서 그리는 선택창 박스 영역 (중앙 정렬 기준)
+                            box_rect = pygame.Rect(config.SCREEN_WIDTH // 2 - 200, 150 + i * 110, 400, 100)
+                            if box_rect.collidepoint(mx, my):
+                                if state.player.is_selecting_boss_reward:
+                                    state.player.apply_chosen_boss_reward(i)
+                                else:
+                                    removed = state.player.apply_chosen_upgrade(i)
+                                    if removed:
+                                        state.bats[:] = [b for b in state.bats if not (isinstance(b, BatMinion) and b.controller == removed)]
+                                break
 
             # [인벤토리 상태]
             elif state.game_state == state.GAME_STATE_INVENTORY:
@@ -133,14 +153,12 @@ async def main():
         if state.game_state == state.GAME_STATE_PLAYING and state.player:
             if not (state.player.is_selecting_upgrade or state.player.is_selecting_boss_reward):
                 
-                # 그리드 시스템 갱신
                 enemy_grid.clear()
                 for s in state.slimes + state.boss_slimes:
                     if s.hp > 0: enemy_grid.register_enemy(s)
 
                 state.player.update(state.slimes, state.get_entities_dict())
                 
-                # 사망 처리
                 if state.player.hp <= 0:
                     score = {
                         "levels": state.player.level, "kills": state.player.total_enemies_killed,
@@ -149,7 +167,6 @@ async def main():
                         "survival_time": state.slime_hp_increase_timer / config.FPS
                     }
                     utils.browser_debug("💀 사망! 데이터 저장 태스크 생성")
-                    # 🚩 중요: 저장을 태스크로 넘기고 바로 메뉴로 이동
                     asyncio.create_task(save_ranking_task(state.player.name, score))
                     
                     state.game_state = state.GAME_STATE_MENU
@@ -180,7 +197,6 @@ async def main():
             shake_cam_x = state.camera_obj.world_x + off_x
             shake_cam_y = state.camera_obj.world_y + off_y
 
-            # 1. 배경
             if background_image:
                 sx, sy = -(shake_cam_x % bg_w), -(shake_cam_y % bg_h)
                 for y in range((config.SCREEN_HEIGHT // bg_h) + 2):
@@ -188,18 +204,15 @@ async def main():
                         screen.blit(background_image, (sx + x * bg_w, sy + y * bg_h))
             else: screen.fill(config.GREEN)
 
-            # 2. 무기 및 플레이어
             for wpn in state.player.active_weapons: wpn.draw(screen, shake_cam_x, shake_cam_y)
             if not (state.player.invincible_timer > 0 and state.player.invincible_timer % 10 < 5):
                 p_rect = state.player.rect.copy()
                 p_rect.x -= off_x; p_rect.y -= off_y
                 screen.blit(state.player.image, p_rect)
             
-            # 3. 모든 엔티티
             for e in state.exp_orbs + state.daggers + state.bats + state.slime_bullets + state.storm_projectiles + state.slimes + state.boss_slimes:
                 e.draw(screen, shake_cam_x, shake_cam_y)
             
-            # 4. HUD
             ui.draw_game_ui(screen, state.player, state.get_entities_dict(), state.current_slime_max_hp, state.player.total_bosses_killed, state.player.total_enemies_killed, config.BOSS_SLIME_SPAWN_KILL_THRESHOLD)
             if state.game_state == state.GAME_STATE_INVENTORY:
                 ui.draw_weapon_inventory(screen, state.player)
@@ -213,16 +226,11 @@ async def main():
             
         elif state.game_state == state.GAME_STATE_RANKING:
             cat = state.RANK_CATEGORIES[state.current_rank_category_index]
-            # 1. 카테고리에 맞는 데이터 필터링
             filtered = [r for r in (state.online_rankings or []) if r.get('RankCategory') == cat]
-            
-            # 🚩 [이 줄을 추가하세요!] 점수(RankValue)가 높은 순서대로 줄 세우기
             filtered.sort(key=lambda x: x.get('RankValue', 0), reverse=True)
-            
-            # 2. 정렬된 데이터를 화면에 그리기
             ui.draw_ranking_screen(screen, filtered, cat)
+
         pygame.display.flip()
-        # 🚩 웹에서 비동기 작업을 처리할 수 있게 하는 핵심 한 줄
         await asyncio.sleep(0) 
 
 if __name__ == "__main__":
